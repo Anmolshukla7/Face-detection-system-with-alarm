@@ -415,9 +415,23 @@ with tab_live:
                     <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
                 </audio>
                 """, unsafe_allow_html=True)
+                st.components.v1.html("""
+                <script>
+                    const msg = new SpeechSynthesisUtterance("Warning! Security breach detected. Unauthorized personnel.");
+                    msg.rate = 1.0;
+                    window.speechSynthesis.speak(msg);
+                </script>
+                """, height=0)
             else:
                 names_str = ", ".join(verified_names)
                 st.success(f"✅ ACCESS GRANTED: Verified identity **{names_str}**!")
+                st.components.v1.html(f"""
+                <script>
+                    const msg = new SpeechSynthesisUtterance("Access granted. Welcome {names_str}. Clearance verified.");
+                    msg.rate = 1.0;
+                    window.speechSynthesis.speak(msg);
+                </script>
+                """, height=0)
 
             st.metric("Entities Detected", count)
             st.metric("Known Profiles in Memory", len(label_map))

@@ -3,7 +3,12 @@ import re
 import time
 import math
 import sqlite3
-import threading
+import queue
+import subprocess
+try:
+    import pyttsx3
+except ImportError:
+    pyttsx3 = None
 try:
     import winsound
 except ImportError:
@@ -171,10 +176,52 @@ def train_recognizer():
 train_recognizer()
 
 # ==========================================
-# 3. SOUND & AUDIO ALERT SYSTEM
+# 3. AI VOICE SYNTHESIZER & AUDIO ALARM
 # ==========================================
 is_muted = False
 last_beep_time = 0
+last_spoken_time = {}
+speech_queue = queue.Queue()
+
+def speech_worker_thread():
+    engine = None
+    try:
+        if pyttsx3:
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 170)
+    except Exception:
+        engine = None
+
+    while True:
+        text = speech_queue.get()
+        if text is None:
+            break
+        if not is_muted:
+            try:
+                if engine:
+                    engine.say(text)
+                    engine.runAndWait()
+                else:
+                    # Windows PowerShell Speech fallback
+                    subprocess.run([
+                        "powershell", "-Command",
+                        f"Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).Speak('{text}')"
+                    ], capture_output=True)
+            except Exception:
+                pass
+        speech_queue.task_done()
+
+threading.Thread(target=speech_worker_thread, daemon=True).start()
+
+def speak_announcement(text, cooldown_key, cooldown_secs=7.0):
+    global last_spoken_time, is_muted
+    if is_muted:
+        return
+    now = time.time()
+    if cooldown_key in last_spoken_time and (now - last_spoken_time[cooldown_key] < cooldown_secs):
+        return
+    last_spoken_time[cooldown_key] = now
+    speech_queue.put(text)
 
 def trigger_beep_alarm():
     global last_beep_time, is_muted
@@ -570,6 +617,9 @@ def main():
                 user_info = get_user_from_db(user_id)
                 log_access_to_db(user_id, user_info['full_name'], status="AUTHORIZED")
 
+                # Voice Announcement for verified identity
+                speak_announcement(f"Access granted. Welcome {user_info['full_name']}.", cooldown_key=user_id, cooldown_secs=9.0)
+
                 # Choose color based on role / clearance
                 if "Chief" in user_info['role'] or "Administrator" in user_info['role']:
                     theme_color = COLOR_VIOLET
@@ -594,6 +644,9 @@ def main():
                     status_text = "CRITICAL WARNING: SECURITY BREACH!"
                     status_color = COLOR_RUBY
                     face_telemetry_positions.append((x, y, w, h, False))
+
+                    # Voice Warning for unauthorized intruder
+                    speak_announcement("Security breach detected. Unauthorized personnel.", cooldown_key="threat_alarm", cooldown_secs=7.0)
 
                     draw_biometric_reticle(frame, x, y, w, h, theme_color, anim_angle, match_pct=15.0, is_locked=True)
                     draw_facial_mesh_triangulation(frame, x, y, w, h, theme_color, pulse_val)
