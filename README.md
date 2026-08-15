@@ -1,6 +1,11 @@
 # ◈ Quantum Sentinel AI // Cyberpunk Biometric Face Recognition HUD
 
-A futuristic, cyberpunk-themed real-time biometric face recognition security system powered by OpenCV and Python. Features animated multi-ring targeting reticles, dynamic facial triangulation mesh, real-time access audit logging, and an animated sonar/radar scanner.
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://face-detection-system-with-alarm-7jbvkbsa7jozulavwkvdbx.streamlit.app/)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-Repository-blue?logo=github)](https://github.com/Anmolshukla7/Face-detection-system-with-alarm)
+
+🔗 **Live Web Application**: [https://face-detection-system-with-alarm-7jbvkbsa7jozulavwkvdbx.streamlit.app/](https://face-detection-system-with-alarm-7jbvkbsa7jozulavwkvdbx.streamlit.app/)
+
+A futuristic, cyberpunk-themed real-time biometric face recognition security system powered by OpenCV and Python. Features animated multi-ring targeting reticles, dynamic facial triangulation mesh, real-time access audit logging, autonomous hands-free 30 FPS web scanning, and an animated sonar/radar scanner.
 
 ---
 
