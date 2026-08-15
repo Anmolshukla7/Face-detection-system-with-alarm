@@ -457,18 +457,36 @@ with tab_live:
                     backdrop-filter: blur(6px);
                 }}
                 .status-badge {{
-                    color: #00F59B;
+                    color: #00E5FF;
                     font-weight: bold;
+                }}
+                .mode-selector-bar {{
+                    position: absolute;
+                    top: 12px;
+                    right: 12px;
+                    z-index: 10;
+                    background: rgba(10, 16, 26, 0.85);
+                    border: 1px solid #00E5FF;
+                    border-radius: 6px;
+                    padding: 4px 10px;
+                    color: #fff;
+                    font-size: 12px;
                 }}
             </style>
         </head>
         <body>
             <div class="scanner-container">
+                <div class="mode-selector-bar">
+                    <label style="cursor: pointer;">
+                        <input type="checkbox" id="authSimToggle" checked onchange="toggleSimAuth(this)">
+                        Simulate Authorized Profile
+                    </label>
+                </div>
                 <video id="webcam" autoplay playsinline muted></video>
                 <canvas id="hudCanvas"></canvas>
                 <div class="hud-overlay">
-                    <div>◈ QUANTUM SENTINEL // CONTINUOUS REAL-TIME HUD</div>
-                    <div id="targetStatus" class="status-badge">● SCANNING FIELD OF VIEW...</div>
+                    <div>◈ QUANTUM SENTINEL // AUTONOMOUS AI BIO-HUD</div>
+                    <div id="targetStatus" class="status-badge">● SCANNING FOR TARGETS...</div>
                 </div>
             </div>
 
@@ -481,14 +499,19 @@ with tab_live:
                 const statusDiv = document.getElementById('targetStatus');
                 const siren = document.getElementById('sirenAudio');
 
-                const hasTrainedProfiles = {has_trained_faces};
+                let isSimAuth = true;
+                function toggleSimAuth(el) {{
+                    isSimAuth = el.checked;
+                    lastSpokenTime = 0; // reset cooldown to speak new state immediately
+                }}
+
                 const primaryAdminName = "{primary_name}";
 
                 let lastSpokenTime = 0;
-                let isSpeaking = false;
                 let scanY = 50;
                 let scanDir = 4;
                 let animAngle = 0;
+                let pulseVal = 0;
 
                 // Start WebCam Feed
                 async function startCamera() {{
@@ -505,7 +528,7 @@ with tab_live:
                             requestAnimationFrame(renderContinuousHUD);
                         }};
                     }} catch (err) {{
-                        statusDiv.innerText = "⚠ CAMERA ACCESS DENIED // ALLOW PERMISSIONS";
+                        statusDiv.innerText = "⚠ CAMERA ACCESS DENIED // PLEASE ALLOW PERMISSIONS";
                         statusDiv.style.color = "#FF3250";
                     }}
                 }}
@@ -520,10 +543,12 @@ with tab_live:
                     window.speechSynthesis.speak(utterance);
                 }}
 
-                // Face Detection
+                // Face Detection API if available
                 let faceDetector = null;
                 if ('FaceDetector' in window) {{
-                    faceDetector = new FaceDetector({{ fastMode: true, maxDetectedFaces: 5 }});
+                    try {{
+                        faceDetector = new FaceDetector({{ fastMode: true, maxDetectedFaces: 5 }});
+                    }} catch (e) {{}}
                 }}
 
                 async function renderContinuousHUD() {{
@@ -532,6 +557,7 @@ with tab_live:
                     ctx.clearRect(0, 0, w, h);
 
                     animAngle = (animAngle + 2) % 360;
+                    pulseVal = (Math.sin(Date.now() / 250) + 1) / 2;
                     scanY += scanDir;
                     if (scanY > h - 40 || scanY < 40) scanDir *= -1;
 
@@ -550,97 +576,115 @@ with tab_live:
                         }} catch (e) {{}}
                     }}
 
-                    // Fallback face tracker if FaceDetector API not in current browser
-                    if (!faceDetector || faces.length === 0) {{
-                        // Simulated central biometric acquisition reticle
-                        const cx = w / 2;
-                        const cy = h / 2 - 20;
-                        const radius = 110;
+                    // If browser detector found face or default to center face tracking
+                    const cx = faces.length > 0 ? (w - (faces[0].boundingBox.x + faces[0].boundingBox.width / 2)) : (w / 2);
+                    const cy = faces.length > 0 ? (faces[0].boundingBox.y + faces[0].boundingBox.height / 2) : (h / 2 - 10);
+                    const boxW = faces.length > 0 ? faces[0].boundingBox.width : 220;
+                    const boxH = faces.length > 0 ? faces[0].boundingBox.height : 250;
+                    const rad = Math.max(boxW, boxH) * 0.65;
+                    const bx = cx - boxW / 2;
+                    const by = cy - boxH / 2;
 
-                        ctx.strokeStyle = "rgba(0, 229, 255, 0.7)";
-                        ctx.lineWidth = 2;
+                    const isVerified = isSimAuth;
+                    const themeColor = isVerified ? "#00F59B" : "#FF3250";
+
+                    // 2. Animated Circular Reticle
+                    ctx.strokeStyle = themeColor;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                    ctx.stroke();
+
+                    // Rotating Segments
+                    for (let i = 0; i < 8; i++) {{
+                        const startRad = (animAngle + i * 45) * Math.PI / 180;
+                        const endRad = startRad + 0.25;
+                        ctx.strokeStyle = themeColor;
+                        ctx.lineWidth = 3;
                         ctx.beginPath();
-                        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                        ctx.arc(cx, cy, rad + 12, startRad, endRad);
                         ctx.stroke();
+                    }}
 
-                        // Rotating ticks
-                        for (let i = 0; i < 8; i++) {{
-                            const startRad = (animAngle + i * 45) * Math.PI / 180;
-                            const endRad = startRad + 0.25;
-                            ctx.strokeStyle = "#00E5FF";
-                            ctx.lineWidth = 3;
-                            ctx.beginPath();
-                            ctx.arc(cx, cy, radius + 10, startRad, endRad);
-                            ctx.stroke();
-                        }}
+                    // 3. Precision Corner Brackets
+                    ctx.strokeStyle = themeColor;
+                    ctx.lineWidth = 3;
+                    const bLen = 25;
+                    ctx.beginPath();
+                    // Top-Left
+                    ctx.moveTo(bx - 10, by - 10);
+                    ctx.lineTo(bx - 10 + bLen, by - 10);
+                    ctx.moveTo(bx - 10, by - 10);
+                    ctx.lineTo(bx - 10, by - 10 + bLen);
+                    // Top-Right
+                    ctx.moveTo(bx + boxW + 10, by - 10);
+                    ctx.lineTo(bx + boxW + 10 - bLen, by - 10);
+                    ctx.moveTo(bx + boxW + 10, by - 10);
+                    ctx.lineTo(bx + boxW + 10, by - 10 + bLen);
+                    // Bottom-Left
+                    ctx.moveTo(bx - 10, by + boxH + 10);
+                    ctx.lineTo(bx - 10 + bLen, by + boxH + 10);
+                    ctx.moveTo(bx - 10, by + boxH + 10);
+                    ctx.lineTo(bx - 10, by + boxH + 10 - bLen);
+                    // Bottom-Right
+                    ctx.moveTo(bx + boxW + 10, by + boxH + 10);
+                    ctx.lineTo(bx + boxW + 10 - bLen, by + boxH + 10);
+                    ctx.moveTo(bx + boxW + 10, by + boxH + 10);
+                    ctx.lineTo(bx + boxW + 10, by + boxH + 10 - bLen);
+                    ctx.stroke();
 
-                        if (hasTrainedProfiles) {{
-                            statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase() + " (LEVEL-5)";
-                            statusDiv.style.color = "#00F59B";
-                            speak("Access granted. Welcome " + primaryAdminName, 10);
-                        }} else {{
-                            statusDiv.innerText = "🟡 BIOMETRIC ACQUISITION // READY";
-                            statusDiv.style.color = "#00E5FF";
-                        }}
+                    // 4. Center Crosshair
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(cx - 8, cy);
+                    ctx.lineTo(cx + 8, cy);
+                    ctx.moveTo(cx, cy - 8);
+                    ctx.lineTo(cx, cy + 8);
+                    ctx.stroke();
+
+                    // 5. Identity Badge Overlay
+                    const badgeX = Math.max(10, Math.min(w - 270, bx - 10));
+                    const badgeY = Math.max(10, by - 65);
+                    ctx.fillStyle = "rgba(10, 14, 22, 0.90)";
+                    ctx.fillRect(badgeX, badgeY, 260, 55);
+                    ctx.strokeStyle = themeColor;
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(badgeX, badgeY, 260, 55);
+
+                    // Left accent bar
+                    ctx.fillStyle = themeColor;
+                    ctx.fillRect(badgeX, badgeY, 5, 55);
+
+                    if (isVerified) {{
+                        ctx.fillStyle = "#FFFFFF";
+                        ctx.font = "bold 14px sans-serif";
+                        ctx.fillText(primaryAdminName.toUpperCase(), badgeX + 14, badgeY + 22);
+                        ctx.fillStyle = "#00F59B";
+                        ctx.font = "11px sans-serif";
+                        ctx.fillText("AUTHORIZED // LEVEL-5 CLEARANCE", badgeX + 14, badgeY + 40);
+
+                        statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase();
+                        statusDiv.style.color = "#00F59B";
+                        speak("Access granted. Welcome " + primaryAdminName, 8);
                     }} else {{
-                        // Render real detected faces
-                        faces.forEach(face => {{
-                            const {{ x, y, width, height }} = face.boundingBox;
-                            const mirroredX = w - x - width; // compensate for mirrored video
-                            const cx = mirroredX + width / 2;
-                            const cy = y + height / 2;
-                            const rad = Math.max(width, height) * 0.65;
+                        // INTRUDER ALERT
+                        ctx.fillStyle = "#FF3250";
+                        ctx.font = "bold 14px sans-serif";
+                        ctx.fillText("UNAUTHORIZED INTRUDER", badgeX + 14, badgeY + 22);
+                        ctx.fillStyle = "#FF9999";
+                        ctx.font = "11px sans-serif";
+                        ctx.fillText("SECURITY ALERT // NO CLEARANCE", badgeX + 14, badgeY + 40);
 
-                            const themeColor = hasTrainedProfiles ? "#00F59B" : "#FF3250";
+                        // Flashing Red Alert Perimeter
+                        ctx.strokeStyle = `rgba(255, 50, 80, ${{0.4 + 0.6 * pulseVal}})`;
+                        ctx.lineWidth = 8;
+                        ctx.strokeRect(0, 0, w, h);
 
-                            // Reticle
-                            ctx.strokeStyle = themeColor;
-                            ctx.lineWidth = 2;
-                            ctx.beginPath();
-                            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
-                            ctx.stroke();
+                        statusDiv.innerText = "🚨 SECURITY BREACH DETECTED // INTRUDER ALERT!";
+                        statusDiv.style.color = "#FF3250";
 
-                            // Corner Brackets
-                            ctx.lineWidth = 3;
-                            ctx.beginPath();
-                            ctx.moveTo(mirroredX - 10, y - 10);
-                            ctx.lineTo(mirroredX + 25, y - 10);
-                            ctx.moveTo(mirroredX - 10, y - 10);
-                            ctx.lineTo(mirroredX - 10, y + 25);
-
-                            ctx.moveTo(mirroredX + width + 10, y - 10);
-                            ctx.lineTo(mirroredX + width - 25, y - 10);
-                            ctx.moveTo(mirroredX + width + 10, y - 10);
-                            ctx.lineTo(mirroredX + width + 10, y + 25);
-                            ctx.stroke();
-
-                            // Badge
-                            ctx.fillStyle = "rgba(10, 14, 22, 0.88)";
-                            ctx.fillRect(mirroredX, y - 55, 220, 48);
-                            ctx.strokeStyle = themeColor;
-                            ctx.strokeRect(mirroredX, y - 55, 220, 48);
-
-                            ctx.fillStyle = "#FFFFFF";
-                            ctx.font = "bold 13px sans-serif";
-                            if (hasTrainedProfiles) {{
-                                ctx.fillText(primaryAdminName.toUpperCase(), mirroredX + 12, y - 35);
-                                ctx.fillStyle = "#00F59B";
-                                ctx.font = "11px sans-serif";
-                                ctx.fillText("AUTHORIZED // LEVEL-5", mirroredX + 12, y - 18);
-                                statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase();
-                                statusDiv.style.color = "#00F59B";
-                                speak("Access granted. Welcome " + primaryAdminName, 8);
-                            }} else {{
-                                ctx.fillText("UNAUTHORIZED INTRUDER", mirroredX + 12, y - 35);
-                                ctx.fillStyle = "#FF3250";
-                                ctx.font = "11px sans-serif";
-                                ctx.fillText("SECURITY THREAT // NO ACCESS", mirroredX + 12, y - 18);
-                                statusDiv.innerText = "🚨 SECURITY BREACH DETECTED!";
-                                statusDiv.style.color = "#FF3250";
-                                speak("Warning! Security breach detected. Unauthorized personnel.", 6);
-                                siren.play().catch(e => {{}});
-                            }}
-                        }});
+                        speak("Warning! Security breach detected. Unauthorized personnel.", 6);
+                        siren.play().catch(e => {{}});
                     }}
 
                     requestAnimationFrame(renderContinuousHUD);
@@ -650,7 +694,7 @@ with tab_live:
             </script>
         </body>
         </html>
-        """, height=540)
+        """, height=560)
 
     else:
         st.markdown("### 📷 Single Frame Snapshot & Analysis")
