@@ -18,3 +18,9 @@ Thumbs.db
 
 # Database (optional - keep if you want demo users included)
 # security_database.db
+
+# Personal Photos & Face Datasets (Private)
+known_faces/
+*.jpg
+*.jpeg
+*.png
