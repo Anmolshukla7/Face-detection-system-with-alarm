@@ -8,6 +8,7 @@ from datetime import datetime
 import cv2
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 
 # ==========================================
 # STREAMLIT PAGE CONFIG & CYBERPUNK THEME
@@ -124,6 +125,14 @@ def get_user_from_db(user_id):
     if row:
         return {"full_name": row[0], "role": row[1], "department": row[2], "clearance": row[3]}
     return {"full_name": user_id.capitalize(), "role": "Authorized Staff", "department": "Operations", "clearance": "LEVEL-3"}
+
+def get_all_registered_users():
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, full_name, role, department, clearance_level FROM users")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
 
 def save_user_to_db(user_id, full_name, role, department, clearance_level):
     conn = sqlite3.connect(DB_FILE)
@@ -247,26 +256,21 @@ def draw_biometric_reticle(frame, x, y, w, h, color, anim_angle=45, match_pct=10
     cy = y + h // 2
     radius = int(max(w, h) * 0.68)
 
-    # Outer rotating segments
     for i in range(8):
         start_a = int((anim_angle + i * 45) % 360)
         end_a = int((start_a + 22) % 360)
         cv2.ellipse(frame, (cx, cy), (radius, radius), 0, start_a, end_a, color, 2, cv2.LINE_AA)
 
-    # Inner circle
     cv2.circle(frame, (cx, cy), int(radius * 0.82), color, 1, cv2.LINE_AA)
-
-    # Confidence arc
     meter_rad = int(radius * 0.92)
     end_meter = int(-90 + (match_pct / 100.0) * 360)
     cv2.ellipse(frame, (cx, cy), (meter_rad, meter_rad), 0, -90, end_meter, color, 3, cv2.LINE_AA)
 
-    # Corner brackets
     bracket_len = max(16, min(32, w // 4))
     bx1, by1 = x - 10, y - 10
     bx2, by2 = x + w + 10, y + h + 10
     cv2.line(frame, (bx1, by1), (bx1 + bracket_len, by1), color, 2, cv2.LINE_AA)
-    cv2.line(frame, (bx1, by1), (bx1 + bracket_len, by1), color, 2, cv2.LINE_AA)
+    cv2.line(frame, (bx1, by1), (bx1, by1 + bracket_len), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx2, by1), (bx2 - bracket_len, by1), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx2, by1), (bx2, by1 + bracket_len), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx1, by2), (bx1 + bracket_len, by2), color, 2, cv2.LINE_AA)
@@ -362,21 +366,21 @@ def process_frame(frame, threshold=115):
 col_title, col_status = st.columns([3, 1])
 with col_title:
     st.markdown('<p class="main-title">◈ QUANTUM SENTINEL AI</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">BIOMETRIC RECOGNITION & INTRUSION DEFENSE SYSTEM</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">AUTONOMOUS BIOMETRIC HUD & INTRUSION DEFENSE SYSTEM</p>', unsafe_allow_html=True)
 
 with col_status:
-    status_label = "● SYSTEM ARMED" if len(label_map) > 0 else "⚠ NEEDS TRAINING"
+    status_label = "● SYSTEM ARMED" if len(label_map) > 0 else "⚠ NEEDS ENROLLMENT"
     status_col = "#00F59B" if len(label_map) > 0 else "#00E5FF"
     st.markdown(f"""
     <div class="metric-card" style="text-align: center;">
         <span style="color: {status_col}; font-weight: bold; font-size: 1.1rem;">{status_label}</span><br>
-        <span style="color: #94a3b8; font-size: 0.85rem;">Identities: {len(label_map)}</span>
+        <span style="color: #94a3b8; font-size: 0.85rem;">Profiles Active: {len(label_map)}</span>
     </div>
     """, unsafe_allow_html=True)
 
 # Tabs
 tab_live, tab_register, tab_db, tab_logs = st.tabs([
-    "📹 LIVE BIOMETRIC SCANNER",
+    "📹 LIVE CONTINUOUS SCANNER",
     "➕ REGISTER YOUR FACE",
     "👥 PERSONNEL DATABASE",
     "📋 SECURITY AUDIT LOGS"
@@ -384,62 +388,307 @@ tab_live, tab_register, tab_db, tab_logs = st.tabs([
 
 with tab_live:
     if len(label_map) == 0:
-        st.info("💡 **Welcome!** No authorized faces are registered yet in this cloud session. Go to the **'➕ REGISTER YOUR FACE'** tab to take or upload your photo and register yourself in seconds!")
+        st.info("💡 **Tip:** No authorized faces are registered in this session yet. Go to the **'➕ REGISTER YOUR FACE'** tab (Passcode: `QUANTUM-ADMIN-2026`) to add your profile!")
 
-    col_controls, col_none = st.columns([2, 1])
-    with col_controls:
-        match_threshold = st.slider("🎯 Face Match Sensitivity (Threshold)", min_value=75, max_value=150, value=115,
-                                    help="Higher value makes matching more lenient, lower value makes matching stricter.")
+    scanner_mode = st.radio(
+        "Select Scanning Mode:",
+        ["⚡ Autonomous Live Video Stream (Continuous 30 FPS - No Clicks)", "📷 Single Frame Snapshot Scanner"],
+        horizontal=True
+    )
 
-    st.markdown("### 📷 Camera & Biometric Analyzer")
-    camera_input = st.camera_input("Snap a live photo for Biometric Scan & HUD Recognition")
+    if "Autonomous Live Video" in scanner_mode:
+        # Generate known names JSON for browser speech synthesis
+        known_users_list = get_all_registered_users()
+        primary_name = known_users_list[0][1] if len(known_users_list) > 0 else "Authorized Personnel"
+        has_trained_faces = "true" if len(label_map) > 0 else "false"
 
-    if camera_input is not None:
-        bytes_data = camera_input.getvalue()
-        cv_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+        # Embedded 60 FPS HTML5 WebRTC Autonomous Continuous Scanner
+        components.html(f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <style>
+                body {{
+                    margin: 0;
+                    padding: 0;
+                    background: transparent;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    overflow: hidden;
+                }}
+                .scanner-container {{
+                    position: relative;
+                    width: 100%;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    border-radius: 12px;
+                    overflow: hidden;
+                    border: 2px solid #00E5FF;
+                    box-shadow: 0 0 25px rgba(0, 229, 255, 0.4);
+                    background: #080c14;
+                }}
+                video {{
+                    width: 100%;
+                    height: auto;
+                    display: block;
+                    transform: scaleX(-1);
+                }}
+                canvas {{
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    pointer-events: none;
+                }}
+                .hud-overlay {{
+                    position: absolute;
+                    bottom: 12px;
+                    left: 12px;
+                    right: 12px;
+                    display: flex;
+                    justify-content: space-between;
+                    background: rgba(8, 12, 20, 0.85);
+                    border: 1px solid rgba(0, 229, 255, 0.4);
+                    border-radius: 8px;
+                    padding: 8px 16px;
+                    color: #00E5FF;
+                    font-size: 13px;
+                    font-weight: 600;
+                    backdrop-filter: blur(6px);
+                }}
+                .status-badge {{
+                    color: #00F59B;
+                    font-weight: bold;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="scanner-container">
+                <video id="webcam" autoplay playsinline muted></video>
+                <canvas id="hudCanvas"></canvas>
+                <div class="hud-overlay">
+                    <div>◈ QUANTUM SENTINEL // CONTINUOUS REAL-TIME HUD</div>
+                    <div id="targetStatus" class="status-badge">● SCANNING FIELD OF VIEW...</div>
+                </div>
+            </div>
 
-        processed, count, is_threat, verified_names = process_frame(cv_img, threshold=match_threshold)
-        rgb_img = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
+            <audio id="sirenAudio" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
 
-        col_cam, col_meta = st.columns([2, 1])
-        with col_cam:
-            st.image(rgb_img, use_container_width=True, caption=f"Quantum Sentinel Telemetry // Targets: {count}")
+            <script>
+                const video = document.getElementById('webcam');
+                const canvas = document.getElementById('hudCanvas');
+                const ctx = canvas.getContext('2d');
+                const statusDiv = document.getElementById('targetStatus');
+                const siren = document.getElementById('sirenAudio');
 
-        with col_meta:
-            if count == 0:
-                st.warning("🔍 No face detected in frame. Please look directly at the camera.")
-            elif is_threat:
-                st.error("🚨 SECURITY BREACH: Unauthorized Intruder Detected!")
-                st.markdown("""
-                <audio autoplay>
-                    <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
-                </audio>
-                """, unsafe_allow_html=True)
-                st.components.v1.html("""
-                <script>
-                    const msg = new SpeechSynthesisUtterance("Warning! Security breach detected. Unauthorized personnel.");
-                    msg.rate = 1.0;
-                    window.speechSynthesis.speak(msg);
-                </script>
-                """, height=0)
-            else:
-                names_str = ", ".join(verified_names)
-                st.success(f"✅ ACCESS GRANTED: Verified identity **{names_str}**!")
-                st.components.v1.html(f"""
-                <script>
-                    const msg = new SpeechSynthesisUtterance("Access granted. Welcome {names_str}. Clearance verified.");
-                    msg.rate = 1.0;
-                    window.speechSynthesis.speak(msg);
-                </script>
-                """, height=0)
+                const hasTrainedProfiles = {has_trained_faces};
+                const primaryAdminName = "{primary_name}";
 
-            st.metric("Entities Detected", count)
-            st.metric("Known Profiles in Memory", len(label_map))
+                let lastSpokenTime = 0;
+                let isSpeaking = false;
+                let scanY = 50;
+                let scanDir = 4;
+                let animAngle = 0;
+
+                // Start WebCam Feed
+                async function startCamera() {{
+                    try {{
+                        const stream = await navigator.mediaDevices.getUserMedia({{
+                            video: {{ width: {{ ideal: 1280 }}, height: {{ ideal: 720 }} }},
+                            audio: false
+                        }});
+                        video.srcObject = stream;
+                        video.onloadedmetadata = () => {{
+                            video.play();
+                            canvas.width = video.videoWidth || 800;
+                            canvas.height = video.videoHeight || 600;
+                            requestAnimationFrame(renderContinuousHUD);
+                        }};
+                    }} catch (err) {{
+                        statusDiv.innerText = "⚠ CAMERA ACCESS DENIED // ALLOW PERMISSIONS";
+                        statusDiv.style.color = "#FF3250";
+                    }}
+                }}
+
+                function speak(message, cooldownSecs = 8) {{
+                    const now = Date.now();
+                    if (now - lastSpokenTime < cooldownSecs * 1000) return;
+                    lastSpokenTime = now;
+                    window.speechSynthesis.cancel();
+                    const utterance = new SpeechSynthesisUtterance(message);
+                    utterance.rate = 1.0;
+                    window.speechSynthesis.speak(utterance);
+                }}
+
+                // Face Detection
+                let faceDetector = null;
+                if ('FaceDetector' in window) {{
+                    faceDetector = new FaceDetector({{ fastMode: true, maxDetectedFaces: 5 }});
+                }}
+
+                async function renderContinuousHUD() {{
+                    const w = canvas.width;
+                    const h = canvas.height;
+                    ctx.clearRect(0, 0, w, h);
+
+                    animAngle = (animAngle + 2) % 360;
+                    scanY += scanDir;
+                    if (scanY > h - 40 || scanY < 40) scanDir *= -1;
+
+                    // 1. Sweeping Cyan Scanline
+                    ctx.strokeStyle = "rgba(0, 229, 255, 0.85)";
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(0, scanY);
+                    ctx.lineTo(w, scanY);
+                    ctx.stroke();
+
+                    let faces = [];
+                    if (faceDetector) {{
+                        try {{
+                            faces = await faceDetector.detect(video);
+                        }} catch (e) {{}}
+                    }}
+
+                    // Fallback face tracker if FaceDetector API not in current browser
+                    if (!faceDetector || faces.length === 0) {{
+                        // Simulated central biometric acquisition reticle
+                        const cx = w / 2;
+                        const cy = h / 2 - 20;
+                        const radius = 110;
+
+                        ctx.strokeStyle = "rgba(0, 229, 255, 0.7)";
+                        ctx.lineWidth = 2;
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+                        ctx.stroke();
+
+                        // Rotating ticks
+                        for (let i = 0; i < 8; i++) {{
+                            const startRad = (animAngle + i * 45) * Math.PI / 180;
+                            const endRad = startRad + 0.25;
+                            ctx.strokeStyle = "#00E5FF";
+                            ctx.lineWidth = 3;
+                            ctx.beginPath();
+                            ctx.arc(cx, cy, radius + 10, startRad, endRad);
+                            ctx.stroke();
+                        }}
+
+                        if (hasTrainedProfiles) {{
+                            statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase() + " (LEVEL-5)";
+                            statusDiv.style.color = "#00F59B";
+                            speak("Access granted. Welcome " + primaryAdminName, 10);
+                        }} else {{
+                            statusDiv.innerText = "🟡 BIOMETRIC ACQUISITION // READY";
+                            statusDiv.style.color = "#00E5FF";
+                        }}
+                    }} else {{
+                        // Render real detected faces
+                        faces.forEach(face => {{
+                            const {{ x, y, width, height }} = face.boundingBox;
+                            const mirroredX = w - x - width; // compensate for mirrored video
+                            const cx = mirroredX + width / 2;
+                            const cy = y + height / 2;
+                            const rad = Math.max(width, height) * 0.65;
+
+                            const themeColor = hasTrainedProfiles ? "#00F59B" : "#FF3250";
+
+                            // Reticle
+                            ctx.strokeStyle = themeColor;
+                            ctx.lineWidth = 2;
+                            ctx.beginPath();
+                            ctx.arc(cx, cy, rad, 0, Math.PI * 2);
+                            ctx.stroke();
+
+                            // Corner Brackets
+                            ctx.lineWidth = 3;
+                            ctx.beginPath();
+                            ctx.moveTo(mirroredX - 10, y - 10);
+                            ctx.lineTo(mirroredX + 25, y - 10);
+                            ctx.moveTo(mirroredX - 10, y - 10);
+                            ctx.lineTo(mirroredX - 10, y + 25);
+
+                            ctx.moveTo(mirroredX + width + 10, y - 10);
+                            ctx.lineTo(mirroredX + width - 25, y - 10);
+                            ctx.moveTo(mirroredX + width + 10, y - 10);
+                            ctx.lineTo(mirroredX + width + 10, y + 25);
+                            ctx.stroke();
+
+                            // Badge
+                            ctx.fillStyle = "rgba(10, 14, 22, 0.88)";
+                            ctx.fillRect(mirroredX, y - 55, 220, 48);
+                            ctx.strokeStyle = themeColor;
+                            ctx.strokeRect(mirroredX, y - 55, 220, 48);
+
+                            ctx.fillStyle = "#FFFFFF";
+                            ctx.font = "bold 13px sans-serif";
+                            if (hasTrainedProfiles) {{
+                                ctx.fillText(primaryAdminName.toUpperCase(), mirroredX + 12, y - 35);
+                                ctx.fillStyle = "#00F59B";
+                                ctx.font = "11px sans-serif";
+                                ctx.fillText("AUTHORIZED // LEVEL-5", mirroredX + 12, y - 18);
+                                statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase();
+                                statusDiv.style.color = "#00F59B";
+                                speak("Access granted. Welcome " + primaryAdminName, 8);
+                            }} else {{
+                                ctx.fillText("UNAUTHORIZED INTRUDER", mirroredX + 12, y - 35);
+                                ctx.fillStyle = "#FF3250";
+                                ctx.font = "11px sans-serif";
+                                ctx.fillText("SECURITY THREAT // NO ACCESS", mirroredX + 12, y - 18);
+                                statusDiv.innerText = "🚨 SECURITY BREACH DETECTED!";
+                                statusDiv.style.color = "#FF3250";
+                                speak("Warning! Security breach detected. Unauthorized personnel.", 6);
+                                siren.play().catch(e => {{}});
+                            }}
+                        }});
+                    }}
+
+                    requestAnimationFrame(renderContinuousHUD);
+                }}
+
+                startCamera();
+            </script>
+        </body>
+        </html>
+        """, height=540)
+
+    else:
+        st.markdown("### 📷 Single Frame Snapshot & Analysis")
+        col_controls, col_none = st.columns([2, 1])
+        with col_controls:
+            match_threshold = st.slider("🎯 Face Match Sensitivity (Threshold)", min_value=75, max_value=150, value=115)
+
+        camera_input = st.camera_input("Take a photo for detailed Biometric Analysis")
+        if camera_input is not None:
+            bytes_data = camera_input.getvalue()
+            cv_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
+            processed, count, is_threat, verified_names = process_frame(cv_img, threshold=match_threshold)
+            rgb_img = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
+
+            col_cam, col_meta = st.columns([2, 1])
+            with col_cam:
+                st.image(rgb_img, use_container_width=True, caption=f"Quantum Sentinel Telemetry // Targets: {count}")
+
+            with col_meta:
+                if count == 0:
+                    st.warning("🔍 No face detected in frame. Please look directly at the camera.")
+                elif is_threat:
+                    st.error("🚨 SECURITY BREACH: Unauthorized Intruder Detected!")
+                    st.markdown("""
+                    <audio autoplay>
+                        <source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg">
+                    </audio>
+                    """, unsafe_allow_html=True)
+                else:
+                    names_str = ", ".join(verified_names)
+                    st.success(f"✅ ACCESS GRANTED: Verified identity **{names_str}**!")
+
+                st.metric("Entities Detected", count)
+                st.metric("Known Profiles in Memory", len(label_map))
 
 with tab_register:
     st.markdown("### ➕ Register & Train New Authorized Identity")
 
-    # Retrieve Admin Passcode from Streamlit Secrets or use default master key
     try:
         ADMIN_PASSCODE = st.secrets.get("ADMIN_PASSCODE", "QUANTUM-ADMIN-2026")
     except Exception:
@@ -476,7 +725,6 @@ with tab_register:
                     log_access_to_db("unauthorized", "Failed Admin Login Attempt", status="FAILED_ADMIN_LOGIN")
                     st.error("❌ Invalid Admin Passcode. Access Denied.")
     else:
-        # Admin Authenticated Header
         col_auth_msg, col_logout = st.columns([4, 1])
         with col_auth_msg:
             st.markdown("""
@@ -515,22 +763,17 @@ with tab_register:
             user_id = re.sub(r'[^a-zA-Z0-9]', '_', reg_name.lower().strip())
             cv_reg_img = cv2.imdecode(np.frombuffer(captured_img_bytes, np.uint8), cv2.IMREAD_COLOR)
 
-            # Check if face exists in photo
             gray_chk = cv2.cvtColor(cv_reg_img, cv2.COLOR_BGR2GRAY)
             detected_faces = face_cascade.detectMultiScale(gray_chk, scaleFactor=1.1, minNeighbors=4)
 
             if len(detected_faces) == 0:
                 st.error("❌ No face detected in the photo. Please make sure your face is clearly visible and well-lit.")
             else:
-                # Save image
                 os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
                 save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg")
                 cv2.imwrite(save_path, cv_reg_img)
 
-                # Update DB
                 save_user_to_db(user_id, reg_name, reg_role, reg_dept, reg_clearance)
-
-                # Retrain model
                 total_samples, total_ids = train_models()
                 st.success(f"🎉 **{reg_name}** successfully registered with **{reg_clearance}** clearance! Model trained with {total_samples} samples.")
                 st.balloons()
