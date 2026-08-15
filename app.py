@@ -44,10 +44,10 @@ st.markdown("""
     }
 
     .sub-title {
-        font-size: 1.0rem;
+        font-size: 0.95rem;
         color: #94a3b8;
         letter-spacing: 2px;
-        margin-bottom: 1.5rem;
+        margin-bottom: 1.2rem;
     }
 
     .metric-card {
@@ -112,16 +112,6 @@ def init_database():
         status TEXT
     )
     """)
-    sample_users = [
-        ("anmol", "Anmol Shukla", "Chief AI Architect", "DeepMind CyberOps", "LEVEL-5 (MAX)"),
-        ("rahul", "Rahul Sharma", "Lead Security Engineer", "Threat Intelligence", "LEVEL-4"),
-        ("elon", "Elon Musk", "Visiting VIP", "Special Operations", "LEVEL-4"),
-    ]
-    for uid, name, role, dept, lvl in sample_users:
-        cursor.execute("""
-            INSERT OR REPLACE INTO users (id, full_name, role, department, clearance_level)
-            VALUES (?, ?, ?, ?, ?)
-        """, (uid, name, role, dept, lvl))
     conn.commit()
     conn.close()
 
@@ -133,7 +123,17 @@ def get_user_from_db(user_id):
     conn.close()
     if row:
         return {"full_name": row[0], "role": row[1], "department": row[2], "clearance": row[3]}
-    return {"full_name": user_id.capitalize(), "role": "Authorized Personnel", "department": "Operations", "clearance": "LEVEL-2"}
+    return {"full_name": user_id.capitalize(), "role": "Authorized Staff", "department": "Operations", "clearance": "LEVEL-3"}
+
+def save_user_to_db(user_id, full_name, role, department, clearance_level):
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT OR REPLACE INTO users (id, full_name, role, department, clearance_level)
+        VALUES (?, ?, ?, ?, ?)
+    """, (user_id, full_name, role, department, clearance_level))
+    conn.commit()
+    conn.close()
 
 def log_access_to_db(user_id, person_name, status="AUTHORIZED"):
     timestamp_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -180,8 +180,7 @@ def extract_person_name(filename):
     cleaned = re.sub(r'[\d_]+$', '', base_name)
     return cleaned if cleaned else base_name
 
-@st.cache_resource
-def load_and_train_models():
+def train_models():
     global label_map, reverse_label_map, faces_data, labels_data, recognizer
     label_map = {}
     current_id = 0
@@ -221,7 +220,7 @@ def load_and_train_models():
         reverse_label_map = {v: k for k, v in label_map.items()}
     return len(faces_data), len(label_map)
 
-load_and_train_models()
+train_models()
 
 # Colors (BGR)
 COLOR_CYAN    = (255, 229, 0)
@@ -267,7 +266,7 @@ def draw_biometric_reticle(frame, x, y, w, h, color, anim_angle=45, match_pct=10
     bx1, by1 = x - 10, y - 10
     bx2, by2 = x + w + 10, y + h + 10
     cv2.line(frame, (bx1, by1), (bx1 + bracket_len, by1), color, 2, cv2.LINE_AA)
-    cv2.line(frame, (bx1, by1), (bx1, by1 + bracket_len), color, 2, cv2.LINE_AA)
+    cv2.line(frame, (bx1, by1), (bx1 + bracket_len, by1), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx2, by1), (bx2 - bracket_len, by1), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx2, by1), (bx2, by1 + bracket_len), color, 2, cv2.LINE_AA)
     cv2.line(frame, (bx1, by2), (bx1 + bracket_len, by2), color, 2, cv2.LINE_AA)
@@ -308,12 +307,14 @@ def draw_glass_badge(frame, x, y, name, role, dept, clearance, match_pct, color)
     cv2.putText(frame, f"{dept}", (card_x + 12, card_y + 55), cv2.FONT_HERSHEY_SIMPLEX, 0.34, COLOR_GRAY, 1, cv2.LINE_AA)
     cv2.putText(frame, f"MATCH: {match_pct:.1f}%", (card_x + 12, card_y + 68), cv2.FONT_HERSHEY_SIMPLEX, 0.32, color, 1, cv2.LINE_AA)
 
-def process_frame(frame):
+def process_frame(frame, threshold=115):
     h, w, _ = frame.shape
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     faces = face_cascade.detectMultiScale(gray, scaleFactor=1.18, minNeighbors=5, minSize=(80, 80))
 
     has_threat = False
+    verified_names = []
+
     for (x, y, w_box, h_box) in faces:
         roi_gray = preprocess_face(gray[y:y+h_box, x:x+w_box])
         user_id = "Unknown"
@@ -321,15 +322,16 @@ def process_frame(frame):
 
         if len(faces_data) > 0:
             label_id, confidence_val = recognizer.predict(roi_gray)
-            if confidence_val < 112:
+            if confidence_val < threshold:
                 user_id = reverse_label_map.get(label_id, "Unknown")
 
-        match_pct = max(0.0, min(99.8, 100.0 - (confidence_val / 112.0) * 45.0)) if user_id != "Unknown" else 20.0
+        match_pct = max(0.0, min(99.8, 100.0 - (confidence_val / threshold) * 45.0)) if user_id != "Unknown" else 15.0
 
         if user_id != "Unknown":
             user_info = get_user_from_db(user_id)
             log_access_to_db(user_id, user_info['full_name'], status="AUTHORIZED")
-            theme_color = COLOR_VIOLET if "Chief" in user_info['role'] else COLOR_EMERALD
+            verified_names.append(user_info['full_name'])
+            theme_color = COLOR_VIOLET if "Chief" in user_info['role'] or "Admin" in user_info['role'] else COLOR_EMERALD
 
             draw_biometric_reticle(frame, x, y, w_box, h_box, theme_color, match_pct=match_pct)
             draw_facial_mesh(frame, x, y, w_box, h_box, theme_color)
@@ -338,9 +340,10 @@ def process_frame(frame):
         else:
             has_threat = True
             theme_color = COLOR_RUBY
+            log_access_to_db("unknown", "Unrecognized Intruder", status="BREACH_ALERT")
             draw_biometric_reticle(frame, x, y, w_box, h_box, theme_color, match_pct=15.0)
             draw_facial_mesh(frame, x, y, w_box, h_box, theme_color)
-            draw_glass_badge(frame, x, y, "UNAUTHORIZED INTRUDER", "SECURITY ALERT",
+            draw_glass_badge(frame, x, y, "UNAUTHORIZED PERSON", "SECURITY ALERT",
                              "NO ACCESS", "LEVEL-0", 15.0, theme_color)
 
     # Top & Bottom Telemetry
@@ -351,36 +354,51 @@ def process_frame(frame):
     if has_threat:
         cv2.rectangle(frame, (0, 0), (w, h), COLOR_RUBY, 6)
 
-    return frame, len(faces), has_threat
+    return frame, len(faces), has_threat, verified_names
 
 # ==========================================
-# STREAMLIT UI LAYOUT
+# STREAMLIT UI LAYOUT & TABS
 # ==========================================
 col_title, col_status = st.columns([3, 1])
 with col_title:
     st.markdown('<p class="main-title">◈ QUANTUM SENTINEL AI</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-title">REAL-TIME BIOMETRIC RECOGNITION & INTRUSION ALARM SYSTEM</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-title">BIOMETRIC RECOGNITION & INTRUSION DEFENSE SYSTEM</p>', unsafe_allow_html=True)
 
 with col_status:
-    st.markdown("""
+    status_label = "● SYSTEM ARMED" if len(label_map) > 0 else "⚠ NEEDS TRAINING"
+    status_col = "#00F59B" if len(label_map) > 0 else "#00E5FF"
+    st.markdown(f"""
     <div class="metric-card" style="text-align: center;">
-        <span style="color: #00F59B; font-weight: bold; font-size: 1.1rem;">● SYSTEM ARMED</span><br>
-        <span style="color: #94a3b8; font-size: 0.85rem;">Defense Online</span>
+        <span style="color: {status_col}; font-weight: bold; font-size: 1.1rem;">{status_label}</span><br>
+        <span style="color: #94a3b8; font-size: 0.85rem;">Identities: {len(label_map)}</span>
     </div>
     """, unsafe_allow_html=True)
 
 # Tabs
-tab_live, tab_db, tab_logs = st.tabs(["📹 LIVE BIOMETRIC SCANNER", "👥 PERSONNEL DATABASE", "📋 AUDIT LOGS"])
+tab_live, tab_register, tab_db, tab_logs = st.tabs([
+    "📹 LIVE BIOMETRIC SCANNER",
+    "➕ REGISTER YOUR FACE",
+    "👥 PERSONNEL DATABASE",
+    "📋 SECURITY AUDIT LOGS"
+])
 
 with tab_live:
+    if len(label_map) == 0:
+        st.info("💡 **Welcome!** No authorized faces are registered yet in this cloud session. Go to the **'➕ REGISTER YOUR FACE'** tab to take or upload your photo and register yourself in seconds!")
+
+    col_controls, col_none = st.columns([2, 1])
+    with col_controls:
+        match_threshold = st.slider("🎯 Face Match Sensitivity (Threshold)", min_value=75, max_value=150, value=115,
+                                    help="Higher value makes matching more lenient, lower value makes matching stricter.")
+
     st.markdown("### 📷 Camera & Biometric Analyzer")
-    camera_input = st.camera_input("Snap a live photo for instant Biometric Scan & HUD Analysis")
+    camera_input = st.camera_input("Snap a live photo for Biometric Scan & HUD Recognition")
 
     if camera_input is not None:
         bytes_data = camera_input.getvalue()
         cv_img = cv2.imdecode(np.frombuffer(bytes_data, np.uint8), cv2.IMREAD_COLOR)
 
-        processed, count, is_threat = process_frame(cv_img)
+        processed, count, is_threat, verified_names = process_frame(cv_img, threshold=match_threshold)
         rgb_img = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
 
         col_cam, col_meta = st.columns([2, 1])
@@ -388,7 +406,9 @@ with tab_live:
             st.image(rgb_img, use_container_width=True, caption=f"Quantum Sentinel Telemetry // Targets: {count}")
 
         with col_meta:
-            if is_threat:
+            if count == 0:
+                st.warning("🔍 No face detected in frame. Please look directly at the camera.")
+            elif is_threat:
                 st.error("🚨 SECURITY BREACH: Unauthorized Intruder Detected!")
                 st.markdown("""
                 <audio autoplay>
@@ -396,35 +416,91 @@ with tab_live:
                 </audio>
                 """, unsafe_allow_html=True)
             else:
-                st.success("✅ BIOMETRIC SCAN COMPLETE: All Targets Verified.")
+                names_str = ", ".join(verified_names)
+                st.success(f"✅ ACCESS GRANTED: Verified identity **{names_str}**!")
 
             st.metric("Entities Detected", count)
-            st.metric("Database Identities", len(label_map))
+            st.metric("Known Profiles in Memory", len(label_map))
+
+with tab_register:
+    st.markdown("### ➕ Register & Train New Authorized Identity")
+    st.markdown("Add your face into the AI model directly from your browser:")
+
+    reg_col1, reg_col2 = st.columns(2)
+    with reg_col1:
+        reg_name = st.text_input("Full Name", value="Anmol Shukla", placeholder="e.g. Anmol Shukla")
+        reg_role = st.text_input("Role / Job Title", value="Chief AI Architect", placeholder="e.g. Lead Engineer")
+    with reg_col2:
+        reg_dept = st.text_input("Department", value="DeepMind CyberOps", placeholder="e.g. Security Ops")
+        reg_clearance = st.selectbox("Clearance Level", ["LEVEL-5 (MAX)", "LEVEL-4", "LEVEL-3", "LEVEL-2", "VIP GUEST"])
+
+    st.markdown("#### Step 2: Provide Reference Face Photo")
+    input_method = st.radio("Capture Method:", ["Take Photo with Webcam", "Upload Photo File"], horizontal=True)
+
+    captured_img_bytes = None
+    if input_method == "Take Photo with Webcam":
+        reg_cam = st.camera_input("Look at the camera and snap your reference photo")
+        if reg_cam:
+            captured_img_bytes = reg_cam.getvalue()
+    else:
+        uploaded_file = st.file_uploader("Upload reference photo (.jpg, .png)", type=["jpg", "jpeg", "png"])
+        if uploaded_file:
+            captured_img_bytes = uploaded_file.getvalue()
+
+    if captured_img_bytes and st.button("🚀 Register & Train Identity"):
+        user_id = re.sub(r'[^a-zA-Z0-9]', '_', reg_name.lower().strip())
+        cv_reg_img = cv2.imdecode(np.frombuffer(captured_img_bytes, np.uint8), cv2.IMREAD_COLOR)
+
+        # Check if face exists in photo
+        gray_chk = cv2.cvtColor(cv_reg_img, cv2.COLOR_BGR2GRAY)
+        detected_faces = face_cascade.detectMultiScale(gray_chk, scaleFactor=1.1, minNeighbors=4)
+
+        if len(detected_faces) == 0:
+            st.error("❌ No face detected in the photo. Please make sure your face is clearly visible and well-lit.")
+        else:
+            # Save image
+            os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
+            save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg")
+            cv2.imwrite(save_path, cv_reg_img)
+
+            # Update DB
+            save_user_to_db(user_id, reg_name, reg_role, reg_dept, reg_clearance)
+
+            # Retrain model
+            total_samples, total_ids = train_models()
+            st.success(f"🎉 **{reg_name}** successfully registered with **{reg_clearance}** clearance! Model trained with {total_samples} samples.")
+            st.balloons()
 
 with tab_db:
-    st.markdown("### 🛡️ Registered Personnel")
+    st.markdown("### 🛡️ Registered Personnel Database")
     conn = sqlite3.connect(DB_FILE)
     users_df = conn.execute("SELECT id, full_name, role, department, clearance_level FROM users").fetchall()
     conn.close()
 
-    for uid, name, role, dept, clr in users_df:
-        st.markdown(f"""
-        <div class="metric-card">
-            <span style="color: #00E5FF; font-weight: bold; font-size: 1.1rem;">{name}</span>
-            <span style="float: right; color: #00F59B; font-weight: bold;">{clr}</span><br>
-            <span style="color: #94a3b8;">Role: {role} | Dept: {dept}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    if not users_df:
+        st.info("No personnel currently registered in the database.")
+    else:
+        for uid, name, role, dept, clr in users_df:
+            st.markdown(f"""
+            <div class="metric-card">
+                <span style="color: #00E5FF; font-weight: bold; font-size: 1.1rem;">{name}</span>
+                <span style="float: right; color: #00F59B; font-weight: bold;">{clr}</span><br>
+                <span style="color: #94a3b8;">Role: {role} | Dept: {dept}</span>
+            </div>
+            """, unsafe_allow_html=True)
 
 with tab_logs:
     st.markdown("### 📋 Live Security Audit Logs")
-    logs = get_recent_access_logs(limit=15)
-    for log_id, name, ts, status in logs:
-        badge_color = "#00F59B" if status == "AUTHORIZED" else "#FF3250"
-        st.markdown(f"""
-        <div class="metric-card" style="padding: 10px 15px; margin-bottom: 6px;">
-            <span style="background: {badge_color}; color: black; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold;">{status}</span>
-            <span style="margin-left: 12px; font-weight: bold;">{name}</span>
-            <span style="float: right; color: #94a3b8; font-size: 0.85rem;">{ts}</span>
-        </div>
-        """, unsafe_allow_html=True)
+    logs = get_recent_access_logs(limit=20)
+    if not logs:
+        st.info("No audit events recorded yet.")
+    else:
+        for log_id, name, ts, status in logs:
+            badge_color = "#00F59B" if status == "AUTHORIZED" else "#FF3250"
+            st.markdown(f"""
+            <div class="metric-card" style="padding: 10px 15px; margin-bottom: 6px;">
+                <span style="background: {badge_color}; color: black; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold;">{status}</span>
+                <span style="margin-left: 12px; font-weight: bold;">{name}</span>
+                <span style="float: right; color: #94a3b8; font-size: 0.85rem;">{ts}</span>
+            </div>
+            """, unsafe_allow_html=True)
