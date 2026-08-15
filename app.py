@@ -424,52 +424,102 @@ with tab_live:
 
 with tab_register:
     st.markdown("### ➕ Register & Train New Authorized Identity")
-    st.markdown("Add your face into the AI model directly from your browser:")
 
-    reg_col1, reg_col2 = st.columns(2)
-    with reg_col1:
-        reg_name = st.text_input("Full Name", value="Anmol Shukla", placeholder="e.g. Anmol Shukla")
-        reg_role = st.text_input("Role / Job Title", value="Chief AI Architect", placeholder="e.g. Lead Engineer")
-    with reg_col2:
-        reg_dept = st.text_input("Department", value="DeepMind CyberOps", placeholder="e.g. Security Ops")
-        reg_clearance = st.selectbox("Clearance Level", ["LEVEL-5 (MAX)", "LEVEL-4", "LEVEL-3", "LEVEL-2", "VIP GUEST"])
+    # Retrieve Admin Passcode from Streamlit Secrets or use default master key
+    try:
+        ADMIN_PASSCODE = st.secrets.get("ADMIN_PASSCODE", "QUANTUM-ADMIN-2026")
+    except Exception:
+        ADMIN_PASSCODE = "QUANTUM-ADMIN-2026"
 
-    st.markdown("#### Step 2: Provide Reference Face Photo")
-    input_method = st.radio("Capture Method:", ["Take Photo with Webcam", "Upload Photo File"], horizontal=True)
+    if "admin_authenticated" not in st.session_state:
+        st.session_state["admin_authenticated"] = False
 
-    captured_img_bytes = None
-    if input_method == "Take Photo with Webcam":
-        reg_cam = st.camera_input("Look at the camera and snap your reference photo")
-        if reg_cam:
-            captured_img_bytes = reg_cam.getvalue()
+    if not st.session_state["admin_authenticated"]:
+        st.markdown("""
+        <div class="metric-card" style="border: 1px solid #FF3250; padding: 25px; text-align: center;">
+            <span style="font-size: 1.8rem;">🔒</span><br>
+            <span style="color: #FF3250; font-family: 'Orbitron', sans-serif; font-size: 1.2rem; font-weight: bold;">
+                RESTRICTED AREA // ADMIN CLEARANCE REQUIRED
+            </span><br>
+            <p style="color: #94a3b8; font-size: 0.9rem; margin-top: 8px;">
+                You must verify Administrator credentials before enrolling new biometric signatures into the central database.
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+        col_pass, col_btn = st.columns([3, 1])
+        with col_pass:
+            entered_pass = st.text_input("Enter Admin Master Passcode", type="password", placeholder="Enter Master Security Key...")
+        with col_btn:
+            st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+            if st.button("🔓 Authenticate"):
+                if entered_pass == ADMIN_PASSCODE:
+                    st.session_state["admin_authenticated"] = True
+                    log_access_to_db("admin", "Admin Console Unlocked", status="ADMIN_AUTH_SUCCESS")
+                    st.success("✅ Admin Clearance Verified!")
+                    st.rerun()
+                else:
+                    log_access_to_db("unauthorized", "Failed Admin Login Attempt", status="FAILED_ADMIN_LOGIN")
+                    st.error("❌ Invalid Admin Passcode. Access Denied.")
     else:
-        uploaded_file = st.file_uploader("Upload reference photo (.jpg, .png)", type=["jpg", "jpeg", "png"])
-        if uploaded_file:
-            captured_img_bytes = uploaded_file.getvalue()
+        # Admin Authenticated Header
+        col_auth_msg, col_logout = st.columns([4, 1])
+        with col_auth_msg:
+            st.markdown("""
+            <div style="background: rgba(0, 245, 155, 0.15); border: 1px solid #00F59B; border-radius: 6px; padding: 6px 15px; display: inline-block;">
+                <span style="color: #00F59B; font-weight: bold;">🟢 ADMIN CLEARANCE: LEVEL-5 ACTIVE</span>
+            </div>
+            """, unsafe_allow_html=True)
+        with col_logout:
+            if st.button("🔒 Lock Console"):
+                st.session_state["admin_authenticated"] = False
+                st.rerun()
 
-    if captured_img_bytes and st.button("🚀 Register & Train Identity"):
-        user_id = re.sub(r'[^a-zA-Z0-9]', '_', reg_name.lower().strip())
-        cv_reg_img = cv2.imdecode(np.frombuffer(captured_img_bytes, np.uint8), cv2.IMREAD_COLOR)
+        st.markdown("#### Step 1: Identity Profile Details")
+        reg_col1, reg_col2 = st.columns(2)
+        with reg_col1:
+            reg_name = st.text_input("Full Name", value="Anmol Shukla", placeholder="e.g. Anmol Shukla")
+            reg_role = st.text_input("Role / Job Title", value="Chief AI Architect", placeholder="e.g. Lead Engineer")
+        with reg_col2:
+            reg_dept = st.text_input("Department", value="DeepMind CyberOps", placeholder="e.g. Security Ops")
+            reg_clearance = st.selectbox("Clearance Level", ["LEVEL-5 (MAX)", "LEVEL-4", "LEVEL-3", "LEVEL-2", "VIP GUEST"])
 
-        # Check if face exists in photo
-        gray_chk = cv2.cvtColor(cv_reg_img, cv2.COLOR_BGR2GRAY)
-        detected_faces = face_cascade.detectMultiScale(gray_chk, scaleFactor=1.1, minNeighbors=4)
+        st.markdown("#### Step 2: Provide Reference Face Photo")
+        input_method = st.radio("Capture Method:", ["Take Photo with Webcam", "Upload Photo File"], horizontal=True)
 
-        if len(detected_faces) == 0:
-            st.error("❌ No face detected in the photo. Please make sure your face is clearly visible and well-lit.")
+        captured_img_bytes = None
+        if input_method == "Take Photo with Webcam":
+            reg_cam = st.camera_input("Look at the camera and snap reference photo")
+            if reg_cam:
+                captured_img_bytes = reg_cam.getvalue()
         else:
-            # Save image
-            os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
-            save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg")
-            cv2.imwrite(save_path, cv_reg_img)
+            uploaded_file = st.file_uploader("Upload reference photo (.jpg, .png)", type=["jpg", "jpeg", "png"])
+            if uploaded_file:
+                captured_img_bytes = uploaded_file.getvalue()
 
-            # Update DB
-            save_user_to_db(user_id, reg_name, reg_role, reg_dept, reg_clearance)
+        if captured_img_bytes and st.button("🚀 Register & Train Identity"):
+            user_id = re.sub(r'[^a-zA-Z0-9]', '_', reg_name.lower().strip())
+            cv_reg_img = cv2.imdecode(np.frombuffer(captured_img_bytes, np.uint8), cv2.IMREAD_COLOR)
 
-            # Retrain model
-            total_samples, total_ids = train_models()
-            st.success(f"🎉 **{reg_name}** successfully registered with **{reg_clearance}** clearance! Model trained with {total_samples} samples.")
-            st.balloons()
+            # Check if face exists in photo
+            gray_chk = cv2.cvtColor(cv_reg_img, cv2.COLOR_BGR2GRAY)
+            detected_faces = face_cascade.detectMultiScale(gray_chk, scaleFactor=1.1, minNeighbors=4)
+
+            if len(detected_faces) == 0:
+                st.error("❌ No face detected in the photo. Please make sure your face is clearly visible and well-lit.")
+            else:
+                # Save image
+                os.makedirs(KNOWN_FACES_DIR, exist_ok=True)
+                save_path = os.path.join(KNOWN_FACES_DIR, f"{user_id}.jpg")
+                cv2.imwrite(save_path, cv_reg_img)
+
+                # Update DB
+                save_user_to_db(user_id, reg_name, reg_role, reg_dept, reg_clearance)
+
+                # Retrain model
+                total_samples, total_ids = train_models()
+                st.success(f"🎉 **{reg_name}** successfully registered with **{reg_clearance}** clearance! Model trained with {total_samples} samples.")
+                st.balloons()
 
 with tab_db:
     st.markdown("### 🛡️ Registered Personnel Database")
