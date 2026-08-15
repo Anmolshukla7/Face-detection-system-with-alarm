@@ -5,6 +5,7 @@ import math
 import sqlite3
 import urllib.request
 from datetime import datetime
+import json
 import cv2
 import numpy as np
 import streamlit as st
@@ -133,6 +134,37 @@ def get_all_registered_users():
     rows = cursor.fetchall()
     conn.close()
     return rows
+
+def get_registered_faces_json():
+    profiles = []
+    if os.path.exists(KNOWN_FACES_DIR):
+        for filename in os.listdir(KNOWN_FACES_DIR):
+            if filename.lower().endswith((".jpg", ".jpeg", ".png")):
+                uid = os.path.splitext(filename)[0]
+                user_info = get_user_from_db(uid)
+                filepath = os.path.join(KNOWN_FACES_DIR, filename)
+                try:
+                    img = cv2.imread(filepath)
+                    if img is not None:
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4)
+                        if len(faces) > 0:
+                            x, y, w, h = faces[0]
+                            roi = preprocess_face(gray[y:y+h, x:x+w])
+                        else:
+                            roi = preprocess_face(gray)
+                        resized = cv2.resize(roi, (8, 8))
+                        feature_vec = (resized.flatten() / 255.0).tolist()
+                        profiles.append({
+                            "id": uid,
+                            "name": user_info["full_name"],
+                            "role": user_info["role"],
+                            "clearance": user_info["clearance"],
+                            "features": feature_vec
+                        })
+                except Exception:
+                    pass
+    return json.dumps(profiles)
 
 def save_user_to_db(user_id, full_name, role, department, clearance_level):
     conn = sqlite3.connect(DB_FILE)
@@ -397,12 +429,9 @@ with tab_live:
     )
 
     if "Autonomous Live Video" in scanner_mode:
-        # Generate known names JSON for browser speech synthesis
-        known_users_list = get_all_registered_users()
-        primary_name = known_users_list[0][1] if len(known_users_list) > 0 else "Authorized Personnel"
-        has_trained_faces = "true" if len(label_map) > 0 else "false"
+        profiles_json = get_registered_faces_json()
 
-        # Embedded 60 FPS HTML5 WebRTC Autonomous Continuous Scanner
+        # Embedded 60 FPS HTML5 WebRTC Autonomous Continuous Biometric Scanner
         components.html(f"""
         <!DOCTYPE html>
         <html>
@@ -460,28 +489,10 @@ with tab_live:
                     color: #00E5FF;
                     font-weight: bold;
                 }}
-                .mode-selector-bar {{
-                    position: absolute;
-                    top: 12px;
-                    right: 12px;
-                    z-index: 10;
-                    background: rgba(10, 16, 26, 0.85);
-                    border: 1px solid #00E5FF;
-                    border-radius: 6px;
-                    padding: 4px 10px;
-                    color: #fff;
-                    font-size: 12px;
-                }}
             </style>
         </head>
         <body>
             <div class="scanner-container">
-                <div class="mode-selector-bar">
-                    <label style="cursor: pointer;">
-                        <input type="checkbox" id="authSimToggle" checked onchange="toggleSimAuth(this)">
-                        Simulate Authorized Profile
-                    </label>
-                </div>
                 <video id="webcam" autoplay playsinline muted></video>
                 <canvas id="hudCanvas"></canvas>
                 <div class="hud-overlay">
@@ -490,28 +501,41 @@ with tab_live:
                 </div>
             </div>
 
-            <audio id="sirenAudio" src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto"></audio>
-
             <script>
                 const video = document.getElementById('webcam');
                 const canvas = document.getElementById('hudCanvas');
                 const ctx = canvas.getContext('2d');
                 const statusDiv = document.getElementById('targetStatus');
-                const siren = document.getElementById('sirenAudio');
 
-                let isSimAuth = true;
-                function toggleSimAuth(el) {{
-                    isSimAuth = el.checked;
-                    lastSpokenTime = 0; // reset cooldown to speak new state immediately
-                }}
-
-                const primaryAdminName = "{primary_name}";
+                const registeredProfiles = {profiles_json};
 
                 let lastSpokenTime = 0;
+                let lastBeepTime = 0;
                 let scanY = 50;
                 let scanDir = 4;
                 let animAngle = 0;
                 let pulseVal = 0;
+
+                // Guaranteed Web Audio Siren Synthesizer
+                function playSirenBeep() {{
+                    const now = Date.now();
+                    if (now - lastBeepTime < 1200) return;
+                    lastBeepTime = now;
+                    try {{
+                        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                        const osc = audioCtx.createOscillator();
+                        const gain = audioCtx.createGain();
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(1400, audioCtx.currentTime + 0.15);
+                        gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                        gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+                        osc.connect(gain);
+                        gain.connect(audioCtx.destination);
+                        osc.start();
+                        osc.stop(audioCtx.currentTime + 0.2);
+                    }} catch(e) {{}}
+                }}
 
                 // Start WebCam Feed
                 async function startCamera() {{
@@ -543,12 +567,52 @@ with tab_live:
                     window.speechSynthesis.speak(utterance);
                 }}
 
-                // Face Detection API if available
+                // Face Detection API
                 let faceDetector = null;
                 if ('FaceDetector' in window) {{
                     try {{
                         faceDetector = new FaceDetector({{ fastMode: true, maxDetectedFaces: 5 }});
                     }} catch (e) {{}}
+                }}
+
+                // Offscreen canvas for spatial feature extraction
+                const offCanvas = document.createElement('canvas');
+                offCanvas.width = 8;
+                offCanvas.height = 8;
+                const offCtx = offCanvas.getContext('2d');
+
+                function matchLiveFace(vx, vy, vw, vh) {{
+                    if (!registeredProfiles || registeredProfiles.length === 0) return null;
+                    try {{
+                        offCtx.drawImage(video, vx, vy, vw, vh, 0, 0, 8, 8);
+                        const imgData = offCtx.getImageData(0, 0, 8, 8).data;
+                        const liveFeats = [];
+                        for (let i = 0; i < imgData.length; i += 4) {{
+                            const gray = (0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]) / 255.0;
+                            liveFeats.push(gray);
+                        }}
+
+                        let bestMatch = null;
+                        let minDistance = 999;
+                        for (const prof of registeredProfiles) {{
+                            if (!prof.features || prof.features.length !== liveFeats.length) continue;
+                            let sumSq = 0;
+                            for (let j = 0; j < liveFeats.length; j++) {{
+                                const diff = liveFeats[j] - prof.features[j];
+                                sumSq += diff * diff;
+                            }}
+                            const dist = Math.sqrt(sumSq) / Math.sqrt(liveFeats.length);
+                            if (dist < minDistance) {{
+                                minDistance = dist;
+                                bestMatch = {{ profile: prof, distance: dist }};
+                            }}
+                        }}
+
+                        if (bestMatch && bestMatch.distance < 0.28) {{
+                            return bestMatch.profile;
+                        }}
+                    }} catch(e) {{}}
+                    return null;
                 }}
 
                 async function renderContinuousHUD() {{
@@ -561,7 +625,7 @@ with tab_live:
                     scanY += scanDir;
                     if (scanY > h - 40 || scanY < 40) scanDir *= -1;
 
-                    // 1. Sweeping Cyan Scanline
+                    // Sweeping Cyan Scanline
                     ctx.strokeStyle = "rgba(0, 229, 255, 0.85)";
                     ctx.lineWidth = 2;
                     ctx.beginPath();
@@ -576,19 +640,24 @@ with tab_live:
                         }} catch (e) {{}}
                     }}
 
-                    // If browser detector found face or default to center face tracking
-                    const cx = faces.length > 0 ? (w - (faces[0].boundingBox.x + faces[0].boundingBox.width / 2)) : (w / 2);
-                    const cy = faces.length > 0 ? (faces[0].boundingBox.y + faces[0].boundingBox.height / 2) : (h / 2 - 10);
-                    const boxW = faces.length > 0 ? faces[0].boundingBox.width : 220;
-                    const boxH = faces.length > 0 ? faces[0].boundingBox.height : 250;
-                    const rad = Math.max(boxW, boxH) * 0.65;
-                    const bx = cx - boxW / 2;
-                    const by = cy - boxH / 2;
+                    // Face coordinates
+                    const hasDetectedFace = (faces.length > 0);
+                    const rawX = hasDetectedFace ? faces[0].boundingBox.x : (w * 0.35);
+                    const rawY = hasDetectedFace ? faces[0].boundingBox.y : (h * 0.25);
+                    const boxW = hasDetectedFace ? faces[0].boundingBox.width : (w * 0.30);
+                    const boxH = hasDetectedFace ? faces[0].boundingBox.height : (h * 0.45);
 
-                    const isVerified = isSimAuth;
+                    const mirroredX = w - rawX - boxW;
+                    const cx = mirroredX + boxW / 2;
+                    const cy = rawY + boxH / 2;
+                    const rad = Math.max(boxW, boxH) * 0.65;
+
+                    // Match against registered database
+                    const matchedProfile = matchLiveFace(rawX, rawY, boxW, boxH);
+                    const isVerified = (matchedProfile !== null);
                     const themeColor = isVerified ? "#00F59B" : "#FF3250";
 
-                    // 2. Animated Circular Reticle
+                    // 1. Biometric Circular Reticle
                     ctx.strokeStyle = themeColor;
                     ctx.lineWidth = 2;
                     ctx.beginPath();
@@ -606,34 +675,34 @@ with tab_live:
                         ctx.stroke();
                     }}
 
-                    // 3. Precision Corner Brackets
+                    // 2. Precision Corner Brackets
                     ctx.strokeStyle = themeColor;
                     ctx.lineWidth = 3;
                     const bLen = 25;
                     ctx.beginPath();
                     // Top-Left
-                    ctx.moveTo(bx - 10, by - 10);
-                    ctx.lineTo(bx - 10 + bLen, by - 10);
-                    ctx.moveTo(bx - 10, by - 10);
-                    ctx.lineTo(bx - 10, by - 10 + bLen);
+                    ctx.moveTo(mirroredX - 10, rawY - 10);
+                    ctx.lineTo(mirroredX - 10 + bLen, rawY - 10);
+                    ctx.moveTo(mirroredX - 10, rawY - 10);
+                    ctx.lineTo(mirroredX - 10, rawY - 10 + bLen);
                     // Top-Right
-                    ctx.moveTo(bx + boxW + 10, by - 10);
-                    ctx.lineTo(bx + boxW + 10 - bLen, by - 10);
-                    ctx.moveTo(bx + boxW + 10, by - 10);
-                    ctx.lineTo(bx + boxW + 10, by - 10 + bLen);
+                    ctx.moveTo(mirroredX + boxW + 10, rawY - 10);
+                    ctx.lineTo(mirroredX + boxW + 10 - bLen, rawY - 10);
+                    ctx.moveTo(mirroredX + boxW + 10, rawY - 10);
+                    ctx.lineTo(mirroredX + boxW + 10, rawY - 10 + bLen);
                     // Bottom-Left
-                    ctx.moveTo(bx - 10, by + boxH + 10);
-                    ctx.lineTo(bx - 10 + bLen, by + boxH + 10);
-                    ctx.moveTo(bx - 10, by + boxH + 10);
-                    ctx.lineTo(bx - 10, by + boxH + 10 - bLen);
+                    ctx.moveTo(mirroredX - 10, rawY + boxH + 10);
+                    ctx.lineTo(mirroredX - 10 + bLen, rawY + boxH + 10);
+                    ctx.moveTo(mirroredX - 10, rawY + boxH + 10);
+                    ctx.lineTo(mirroredX - 10, rawY + boxH + 10 - bLen);
                     // Bottom-Right
-                    ctx.moveTo(bx + boxW + 10, by + boxH + 10);
-                    ctx.lineTo(bx + boxW + 10 - bLen, by + boxH + 10);
-                    ctx.moveTo(bx + boxW + 10, by + boxH + 10);
-                    ctx.lineTo(bx + boxW + 10, by + boxH + 10 - bLen);
+                    ctx.moveTo(mirroredX + boxW + 10, rawY + boxH + 10);
+                    ctx.lineTo(mirroredX + boxW + 10 - bLen, rawY + boxH + 10);
+                    ctx.moveTo(mirroredX + boxW + 10, rawY + boxH + 10);
+                    ctx.lineTo(mirroredX + boxW + 10, rawY + boxH + 10 - bLen);
                     ctx.stroke();
 
-                    // 4. Center Crosshair
+                    // 3. Center Crosshair
                     ctx.lineWidth = 1;
                     ctx.beginPath();
                     ctx.moveTo(cx - 8, cy);
@@ -642,9 +711,9 @@ with tab_live:
                     ctx.lineTo(cx, cy + 8);
                     ctx.stroke();
 
-                    // 5. Identity Badge Overlay
-                    const badgeX = Math.max(10, Math.min(w - 270, bx - 10));
-                    const badgeY = Math.max(10, by - 65);
+                    // 4. Identity Badge Overlay
+                    const badgeX = Math.max(10, Math.min(w - 270, mirroredX - 10));
+                    const badgeY = Math.max(10, rawY - 65);
                     ctx.fillStyle = "rgba(10, 14, 22, 0.90)";
                     ctx.fillRect(badgeX, badgeY, 260, 55);
                     ctx.strokeStyle = themeColor;
@@ -656,21 +725,22 @@ with tab_live:
                     ctx.fillRect(badgeX, badgeY, 5, 55);
 
                     if (isVerified) {{
+                        // Authorized Person
                         ctx.fillStyle = "#FFFFFF";
                         ctx.font = "bold 14px sans-serif";
-                        ctx.fillText(primaryAdminName.toUpperCase(), badgeX + 14, badgeY + 22);
+                        ctx.fillText(matchedProfile.name.toUpperCase(), badgeX + 14, badgeY + 22);
                         ctx.fillStyle = "#00F59B";
                         ctx.font = "11px sans-serif";
-                        ctx.fillText("AUTHORIZED // LEVEL-5 CLEARANCE", badgeX + 14, badgeY + 40);
+                        ctx.fillText("AUTHORIZED // " + matchedProfile.clearance, badgeX + 14, badgeY + 40);
 
-                        statusDiv.innerText = "🟢 VERIFIED: " + primaryAdminName.toUpperCase();
+                        statusDiv.innerText = "🟢 VERIFIED: " + matchedProfile.name.toUpperCase();
                         statusDiv.style.color = "#00F59B";
-                        speak("Access granted. Welcome " + primaryAdminName, 8);
+                        speak("Welcome " + matchedProfile.name, 8);
                     }} else {{
-                        // INTRUDER ALERT
+                        // Unauthorized Person
                         ctx.fillStyle = "#FF3250";
                         ctx.font = "bold 14px sans-serif";
-                        ctx.fillText("UNAUTHORIZED INTRUDER", badgeX + 14, badgeY + 22);
+                        ctx.fillText("UNAUTHORIZED PERSON", badgeX + 14, badgeY + 22);
                         ctx.fillStyle = "#FF9999";
                         ctx.font = "11px sans-serif";
                         ctx.fillText("SECURITY ALERT // NO CLEARANCE", badgeX + 14, badgeY + 40);
@@ -680,11 +750,11 @@ with tab_live:
                         ctx.lineWidth = 8;
                         ctx.strokeRect(0, 0, w, h);
 
-                        statusDiv.innerText = "🚨 SECURITY BREACH DETECTED // INTRUDER ALERT!";
+                        statusDiv.innerText = "🚨 UNAUTHORIZED PERSON DETECTED!";
                         statusDiv.style.color = "#FF3250";
 
-                        speak("Warning! Security breach detected. Unauthorized personnel.", 6);
-                        siren.play().catch(e => {{}});
+                        playSirenBeep();
+                        speak("Warning! Unauthorized person detected.", 6);
                     }}
 
                     requestAnimationFrame(renderContinuousHUD);
