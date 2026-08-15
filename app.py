@@ -150,17 +150,27 @@ def get_registered_faces_json():
                         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4)
                         if len(faces) > 0:
                             x, y, w, h = faces[0]
-                            roi = preprocess_face(gray[y:y+h, x:x+w])
+                            base_roi = preprocess_face(gray[y:y+h, x:x+w])
                         else:
-                            roi = preprocess_face(gray)
-                        resized = cv2.resize(roi, (8, 8))
-                        feature_vec = (resized.flatten() / 255.0).tolist()
+                            base_roi = preprocess_face(gray)
+                        
+                        vectors = []
+                        for aug in [
+                            base_roi,
+                            cv2.flip(base_roi, 1),
+                            cv2.convertScaleAbs(base_roi, alpha=1.2, beta=15),
+                            cv2.convertScaleAbs(base_roi, alpha=0.8, beta=-15)
+                        ]:
+                            resized = cv2.resize(aug, (16, 16))
+                            norm_res = (resized.flatten() / 255.0).tolist()
+                            vectors.append(norm_res)
+
                         profiles.append({
                             "id": uid,
                             "name": user_info["full_name"],
                             "role": user_info["role"],
                             "clearance": user_info["clearance"],
-                            "features": feature_vec
+                            "vectors": vectors
                         })
                 except Exception:
                     pass
@@ -575,41 +585,64 @@ with tab_live:
                     }} catch (e) {{}}
                 }}
 
-                // Offscreen canvas for spatial feature extraction
+                // Offscreen canvas for spatial feature extraction (16x16)
                 const offCanvas = document.createElement('canvas');
-                offCanvas.width = 8;
-                offCanvas.height = 8;
+                offCanvas.width = 16;
+                offCanvas.height = 16;
                 const offCtx = offCanvas.getContext('2d');
 
                 function matchLiveFace(vx, vy, vw, vh) {{
                     if (!registeredProfiles || registeredProfiles.length === 0) return null;
                     try {{
-                        offCtx.drawImage(video, vx, vy, vw, vh, 0, 0, 8, 8);
-                        const imgData = offCtx.getImageData(0, 0, 8, 8).data;
-                        const liveFeats = [];
+                        offCtx.drawImage(video, vx, vy, vw, vh, 0, 0, 16, 16);
+                        const imgData = offCtx.getImageData(0, 0, 16, 16).data;
+                        const grayVals = [];
                         for (let i = 0; i < imgData.length; i += 4) {{
-                            const gray = (0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]) / 255.0;
-                            liveFeats.push(gray);
+                            const g = (0.299 * imgData[i] + 0.587 * imgData[i+1] + 0.114 * imgData[i+2]) / 255.0;
+                            grayVals.push(g);
+                        }}
+
+                        // Real-time Histogram Equalization (matching OpenCV cv2.equalizeHist)
+                        const hist = new Array(256).fill(0);
+                        const len = grayVals.length;
+                        for (let i = 0; i < len; i++) {{
+                            hist[Math.min(255, Math.max(0, Math.floor(grayVals[i] * 255)))]++;
+                        }}
+                        const cdf = new Array(256).fill(0);
+                        cdf[0] = hist[0];
+                        for (let i = 1; i < 256; i++) cdf[i] = cdf[i-1] + hist[i];
+                        const cdfMin = cdf.find(v => v > 0) || 1;
+                        const liveFeats = new Array(len);
+                        for (let i = 0; i < len; i++) {{
+                            const val = Math.min(255, Math.max(0, Math.floor(grayVals[i] * 255)));
+                            liveFeats[i] = ((cdf[val] - cdfMin) / (len - cdfMin || 1));
                         }}
 
                         let bestMatch = null;
-                        let minDistance = 999;
+                        let maxSimilarity = -1;
+
                         for (const prof of registeredProfiles) {{
-                            if (!prof.features || prof.features.length !== liveFeats.length) continue;
-                            let sumSq = 0;
-                            for (let j = 0; j < liveFeats.length; j++) {{
-                                const diff = liveFeats[j] - prof.features[j];
-                                sumSq += diff * diff;
-                            }}
-                            const dist = Math.sqrt(sumSq) / Math.sqrt(liveFeats.length);
-                            if (dist < minDistance) {{
-                                minDistance = dist;
-                                bestMatch = {{ profile: prof, distance: dist }};
+                            const vList = prof.vectors || [prof.features];
+                            for (const vec of vList) {{
+                                if (!vec || vec.length !== liveFeats.length) continue;
+                                // Normalized Cosine Similarity (illumination-invariant)
+                                let dot = 0, normA = 0, normB = 0;
+                                for (let j = 0; j < liveFeats.length; j++) {{
+                                    dot += liveFeats[j] * vec[j];
+                                    normA += liveFeats[j] * liveFeats[j];
+                                    normB += vec[j] * vec[j];
+                                }}
+                                const sim = (normA > 0 && normB > 0) ? (dot / (Math.sqrt(normA) * Math.sqrt(normB))) : 0;
+                                if (sim > maxSimilarity) {{
+                                    maxSimilarity = sim;
+                                    bestMatch = prof;
+                                }}
                             }}
                         }}
 
-                        if (bestMatch && bestMatch.distance < 0.28) {{
-                            return bestMatch.profile;
+                        // Normalized cosine similarity threshold
+                        if (bestMatch && maxSimilarity >= 0.76) {{
+                            return bestMatch;
                         }}
                     }} catch(e) {{}}
                     return null;
