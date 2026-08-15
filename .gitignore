@@ -24,3 +24,7 @@ known_faces/
 *.jpg
 *.jpeg
 *.png
+
+# Streamlit Secrets (Private)
+.streamlit/secrets.toml
+.streamlit/
