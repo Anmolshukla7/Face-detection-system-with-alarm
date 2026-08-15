@@ -31,8 +31,8 @@ A futuristic, cyberpunk-themed real-time biometric face recognition security sys
 
 ### 2. Clone the Repository
 ```bash
-git clone https://github.com/<your-username>/<your-repo-name>.git
-cd <your-repo-name>
+git clone https://github.com/<your-username>/face-detection.git
+cd face-detection
 ```
 
 ### 3. Set Up Virtual Environment & Install Dependencies
