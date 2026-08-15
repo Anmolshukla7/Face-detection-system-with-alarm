@@ -4,8 +4,10 @@ import time
 import math
 import sqlite3
 import threading
-import urllib.request
-import winsound
+try:
+    import winsound
+except ImportError:
+    winsound = None
 from datetime import datetime
 import cv2
 import numpy as np
@@ -183,8 +185,9 @@ def trigger_beep_alarm():
         last_beep_time = now
         def sound_worker():
             try:
-                winsound.MessageBeep(winsound.MB_ICONHAND)
-                winsound.Beep(1600, 250)
+                if winsound:
+                    winsound.MessageBeep(winsound.MB_ICONHAND)
+                    winsound.Beep(1600, 250)
             except Exception:
                 pass
         threading.Thread(target=sound_worker, daemon=True).start()
